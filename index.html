@@ -124,6 +124,98 @@ body{
 }
 .stat-label{font-size:var(--fs-mode);color:var(--muted);margin-top:2px}
 
+/* ===== Task List ===== */
+.task-section{
+  width:100%;
+  background:var(--surface);
+  border-radius:14px;
+  padding:16px;
+}
+.task-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  font-size:var(--fs-mode);
+  color:var(--muted);
+  margin-bottom:12px;
+  text-transform:uppercase;
+  letter-spacing:1px;
+}
+.task-header .task-count{color:var(--orange);font-weight:600;}
+.task-input-row{
+  display:flex;
+  gap:8px;
+  margin-bottom:12px;
+}
+.task-input-row input{
+  flex:1;
+  background:var(--bg);
+  border:1px solid var(--surface2);
+  color:var(--text);
+  font-family:inherit;
+  font-size:0.85rem;
+  padding:8px 12px;
+  border-radius:10px;
+  outline:none;
+}
+.task-input-row input:focus{border-color:var(--orange);}
+.task-input-row button{
+  background:var(--orange);
+  color:#fff;
+  border:none;
+  padding:8px 16px;
+  border-radius:10px;
+  font-family:inherit;
+  font-size:0.85rem;
+  font-weight:600;
+  cursor:pointer;
+  transition:background .2s;
+}
+.task-input-row button:hover{background:#ea580c}
+.task-list{list-style:none;max-height:180px;overflow-y:auto;}
+.task-list::-webkit-scrollbar{width:4px;}
+.task-list::-webkit-scrollbar-track{background:transparent;}
+.task-list::-webkit-scrollbar-thumb{background:var(--surface2);border-radius:2px;}
+.task-item{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:6px 4px;
+  border-bottom:1px solid rgba(255,255,255,0.03);
+  font-size:0.85rem;
+}
+.task-item:last-child{border-bottom:none;}
+.task-item input[type="checkbox"]{
+  accent-color:var(--orange);
+  width:16px;height:16px;
+  cursor:pointer;
+  flex-shrink:0;
+}
+.task-item .task-text{
+  flex:1;
+  word-break:break-word;
+  color:var(--text);
+}
+.task-item .task-text.done{text-decoration:line-through;opacity:0.4;}
+.task-item .task-del{
+  background:none;
+  border:none;
+  color:var(--muted);
+  cursor:pointer;
+  font-size:0.8rem;
+  padding:2px 6px;
+  border-radius:4px;
+  transition:all .2s;
+  flex-shrink:0;
+}
+.task-item .task-del:hover{color:#ff4444;background:rgba(255,68,68,0.1);}
+.task-empty{
+  color:var(--muted);
+  font-size:0.8rem;
+  text-align:center;
+  padding:12px;
+}
+
 /* ===== Responsive tweaks ===== */
 @media(max-width:400px){
   .container{padding:16px;gap:18px}
@@ -188,6 +280,23 @@ body{
       <div class="stat-value" id="total-session-count">0</div>
       <div class="stat-label">Total</div>
     </div>
+    <div class="stat">
+      <div class="stat-value" id="task-count-display">0/0</div>
+      <div class="stat-label">Tasks</div>
+    </div>
+  </div>
+
+  <!-- Task List -->
+  <div class="task-section">
+    <div class="task-header">
+      <span>📋 Tasks</span>
+      <span class="task-count" id="taskCountLabel">0 completed</span>
+    </div>
+    <div class="task-input-row">
+      <input type="text" id="taskInput" placeholder="Add a task..." maxlength="80">
+      <button id="taskAddBtn">Add</button>
+    </div>
+    <div class="task-list" id="taskList"></div>
   </div>
 
 </div>
@@ -211,24 +320,101 @@ body{
   const sessionCount  = document.getElementById('session-count');
   const totalCount    = document.getElementById('total-session-count');
   const container     = document.querySelector('.container');
+  const taskInput     = document.getElementById('taskInput');
+  const taskAddBtn    = document.getElementById('taskAddBtn');
+  const taskList      = document.getElementById('taskList');
+  const taskCountDisplay = document.getElementById('task-count-display');
+  const taskCountLabel = document.getElementById('taskCountLabel');
 
   // ─── State ───────────────────────────────────────────────────────
-  let mode        = 'focus';       // current mode key
+  let mode        = 'focus';
   let timeLeft    = DURATIONS[mode];
-  let totalElapsed= 0;             // seconds elapsed in current session
+  let totalElapsed= 0;
   let isRunning   = false;
   let isPaused    = false;
-  let pomodoros   = 0;             // completed focus sessions this cycle
-  let totalPomodoros = 0;          // lifetime
-  let cycleIndex  = 0;             // index into MODE_ORDER for auto-advance
+  let pomodoros   = 0;
+  let totalPomodoros = 0;
+  let cycleIndex  = 0;
   let timerId     = null;
   let audioCtx    = null;
+  let tasks       = [];          // {text, done}
+
+  // ─── Task persistence ────────────────────────────────────────────
+  function loadTasks() {
+    try {
+      const data = localStorage.getItem('pm_tasks');
+      if (data) tasks = JSON.parse(data);
+    } catch(e) { tasks = []; }
+  }
+  function saveTasks() {
+    try { localStorage.setItem('pm_tasks', JSON.stringify(tasks)); } catch(e) {}
+  }
+
+  function renderTasks() {
+    if (tasks.length === 0) {
+      taskList.innerHTML = '<div class="task-empty">No tasks yet. Add one above!</div>';
+      taskCountDisplay.textContent = '0/0';
+      taskCountLabel.textContent = '0 completed';
+      return;
+    }
+    let html = '';
+    let doneCount = 0;
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (t.done) doneCount++;
+      const doneClass = t.done ? ' done' : '';
+      html += `<li class="task-item">
+        <input type="checkbox" data-idx="${i}" ${t.done ? 'checked' : ''}>
+        <span class="task-text${doneClass}">${escapeHtml(t.text)}</span>
+        <button class="task-del" data-idx="${i}" title="Remove">✕</button>
+      </li>`;
+    }
+    taskList.innerHTML = html;
+    taskCountDisplay.textContent = doneCount + '/' + tasks.length;
+    taskCountLabel.textContent = doneCount + ' completed';
+
+    // Bind checkbox events
+    taskList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', function() {
+        const idx = parseInt(this.dataset.idx);
+        tasks[idx].done = this.checked;
+        saveTasks();
+        renderTasks();
+      });
+    });
+    // Bind delete events
+    taskList.querySelectorAll('.task-del').forEach(btn => {
+      btn.addEventListener('click', function() {
+        const idx = parseInt(this.dataset.idx);
+        tasks.splice(idx, 1);
+        saveTasks();
+        renderTasks();
+      });
+    });
+  }
+
+  function addTask() {
+    const text = taskInput.value.trim();
+    if (!text) return;
+    tasks.push({ text: text, done: false });
+    saveTasks();
+    taskInput.value = '';
+    renderTasks();
+  }
+
+  taskAddBtn.addEventListener('click', addTask);
+  taskInput.addEventListener('keydown', e => { if (e.key === 'Enter') addTask(); });
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
 
   // ─── Audio ───────────────────────────────────────────────────────
   function playBeep() {
     try {
       audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-      // resume if suspended (browser autoplay policy)
       if (audioCtx.state === 'suspended') audioCtx.resume();
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -240,9 +426,8 @@ body{
       gain.connect(audioCtx.destination);
       osc.start();
       osc.stop(audioCtx.currentTime + 0.4);
-    } catch(_){/* silent fail */}
+    } catch(_){}
 
-    // second beep 200ms later (double beep)
     setTimeout(() => {
       try {
         const osc2 = audioCtx.createOscillator();
@@ -261,7 +446,6 @@ body{
 
   // ─── Ring progress ───────────────────────────────────────────────
   function updateRing(frac) {
-    // frac: 0 = full, 1 = empty
     const offset = CIRCUMFERENCE * (1 - frac);
     progressRing.style.strokeDasharray = CIRCUMFERENCE;
     progressRing.style.strokeDashoffset = offset;
@@ -313,7 +497,7 @@ body{
     }
   }
 
-  // ─── Set mode (no auto-start) ────────────────────────────────────
+  // ─── Set mode ────────────────────────────────────────────────────
   function setMode(newMode) {
     if (isRunning) stopTimer();
     isPaused = false;
@@ -336,11 +520,9 @@ body{
     updateDisplay();
 
     if (timeLeft <= 0) {
-      // session complete!
       stopTimer();
       playBeep();
 
-      // flash ring
       container.classList.add('timer-ending');
       setTimeout(() => container.classList.remove('timer-ending'), 1500);
 
@@ -350,13 +532,10 @@ body{
         updateStats();
       }
 
-      // auto-advance to next mode
       cycleIndex = (cycleIndex + 1) % MODE_ORDER.length;
       const nextMode = MODE_ORDER[cycleIndex];
       setMode(nextMode);
-      // auto-start next session
       startTimer();
-      // notification
       if (Notification.permission === 'granted') {
         const title = nextMode === 'focus' ? 'Time to Focus! 🍅' : 'Take a Break ☕';
         new Notification(title, { body: nextMode === 'focus' ? 'Focus session started.' : `${nextMode === 'short' ? 'Short' : 'Long'} break started.` });
@@ -367,11 +546,9 @@ body{
   // ─── Start / Stop / Pause / Reset ────────────────────────────────
   function startTimer() {
     if (isRunning) return;
-    // request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
-    // resume audio context if needed (user gesture)
     if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     isRunning = true;
     isPaused  = false;
@@ -421,7 +598,6 @@ body{
     btn.addEventListener('click', () => {
       const newMode = btn.dataset.mode;
       if (newMode === mode) return;
-      // reset cycle index to the first occurrence of this mode
       cycleIndex = MODE_ORDER.indexOf(newMode);
       if (cycleIndex === -1) cycleIndex = 0;
       setMode(newMode);
@@ -436,6 +612,8 @@ body{
   });
 
   // ─── Initial render ──────────────────────────────────────────────
+  loadTasks();
+  renderTasks();
   setMode('focus');
   updateStats();
 })();
